@@ -11,14 +11,14 @@ export class UserController {
   @UseGuards(JwtAuthGuard)
   async getSellerCustomers(@Request() req) {
     try {
-      // 🔥 FIX: Extract from 'username' based on your actual JWT payload
       const email = req.user.email || req.user.username; 
-      const role = req.user.role; 
+      const role = req.user.role || req.user.roles; // Ensure role array/string is captured
       
       if (!email) {
         throw new BadRequestException('No email/username found in token');
       }
 
+      // Passes BOTH email and role to the service where the RBAC filtering actually happens!
       const customers = await this.userService.findCustomersBySeller(email, role);
       
       return { 
@@ -26,7 +26,7 @@ export class UserController {
         data: customers 
       };
       
-    } catch (error) {
+    } catch (error: any) {
       console.error("❌ [FATAL ERROR in getSellerCustomers]:", error);
       throw new InternalServerErrorException(
         error.message || 'An unexpected error occurred while fetching customers'

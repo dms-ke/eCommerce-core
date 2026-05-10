@@ -1,5 +1,5 @@
 // src/messages/messages.controller.ts
-import { Controller, Get, Post, Body, Param, UseGuards, Request, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards, Request, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { MessagesService } from './messages.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -15,7 +15,7 @@ export class MessagesController {
     return this.messagesService.sendMessage(
       userId, 
       Number(body.sellerId), 
-      body.sellerName, 
+      body.sellerName || 'Vendor', 
       body.content, 
       Number(body.orderId), 
       Number(body.productId), 
@@ -23,7 +23,7 @@ export class MessagesController {
     );
   }
 
-  // 2. NEW: Customer fetching their specific thread (ID-BASED)
+  // 2. Customer fetching their specific thread (ID-BASED)
   // This is what was missing! It allows the customer to see the history.
   @Get(':sellerId/:orderId/:productId')
   async getConversation(
@@ -48,7 +48,7 @@ export class MessagesController {
   @Post('reply')
   async sellerReply(
     @Request() req,
-    @Body() body: { customerId: number; sellerName: string; content: string; orderId: number; productId: number }
+    @Body() body: { customerId: number; sellerName?: string; content: string; orderId: number; productId: number }
   ) {
     if (!body.customerId || !body.content || !body.orderId || !body.productId) {
       throw new BadRequestException('Missing required fields');
@@ -56,16 +56,41 @@ export class MessagesController {
 
     const adminId = req.user.sub || req.user.userId || req.user.id;
     
+    // 🔥 FIX: Extract sellerName from JWT token instead of relying on frontend body!
+    const sellerName = req.user.username || req.user.fullName || req.user.email || 'System Vendor';
+    
     // We pass body.customerId as the 'senderId' to keep the thread grouped 
-    // by the customer's ID, but set isFromSeller to true.
+    // by the customer's ID, but set isFromSeller to true
     return this.messagesService.sendMessage(
-      body.customerId, 
-      adminId, 
-      body.sellerName, 
-      body.content, 
-      Number(body.orderId), 
-      Number(body.productId), 
-      true
+      body.customerId, // senderId (the customer)
+      adminId,         // sellerId
+      sellerName,      // 🔥 Passing the extracted token name!
+      body.content,
+      body.orderId,
+      body.productId,
+      true             // isFromSeller
     );
+  }
+
+  // ========================================================
+  // 🔥 NEW: ADMIN EVIDENCE FETCHER ENDPOINT
+  // ========================================================
+
+  // GET /messages/admin/thread/:orderId/:productId
+  @Get('admin/thread/:orderId/:productId')
+  async getAdminThread(
+    @Request() req, 
+    @Param('orderId') orderId: number, 
+    @Param('productId') productId: number
+  ) {
+    const role = req.user.role || req.user.roles;
+    const isSuperAdmin = role === 'ADMIN' || role === 'admin' || (Array.isArray(role) && (role.includes('admin') || role.includes('ADMIN')));
+
+    // Security Check: If the user is a Seller or Customer, they get blocked!
+    if (!isSuperAdmin) {
+      throw new UnauthorizedException('Access denied. Only Admins can view third-party chat logs.');
+    }
+
+    return this.messagesService.getAdminThread(Number(orderId), Number(productId));
   }
 }

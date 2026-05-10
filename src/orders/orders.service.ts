@@ -22,7 +22,7 @@ export class OrdersService {
     return this.ordersRepository.find({
       where: { userId: userId },
       relations: ['items', 'items.product'],
-      // 🔥 FIX: Include soft-deleted products so customer's order history stays intact!
+      // 🔥 Include soft-deleted products so customer's order history stays intact!
       withDeleted: true,
       order: { orderDate: 'DESC' } 
     });
@@ -31,7 +31,8 @@ export class OrdersService {
   async checkoutCart(userId: number, orderData: any): Promise<any> {
     return this.dataSource.transaction(async (manager) => {
       
-      const { items, phoneNumber, paymentMethod = 'MPESA', shippingAddress, shippingFee = 0 } = orderData;
+      // 🔥 UPDATED: Added deliveryMethod extraction here
+      const { items, phoneNumber, paymentMethod = 'MPESA', shippingAddress, shippingFee = 0, deliveryMethod = 'VENDOR' } = orderData;
 
       if (!items || items.length === 0) {
         throw new BadRequestException('Your cart is empty. Add items before checking out.');
@@ -56,6 +57,7 @@ export class OrdersService {
 
       const grandTotal = subtotal + Number(shippingFee);
 
+      // 🔥 UPDATED: Added deliveryMethod to the order creation
       const newOrder = manager.create(Order, {
         userId,
         totalAmount: grandTotal,
@@ -63,7 +65,9 @@ export class OrdersService {
         shippingAddress,
         phoneNumber,
         paymentMethod,
-        orderDate: new Date() // 🔥 FIX: Explicitly set the date here!
+        shippingFee: Number(shippingFee), // Good practice to ensure it's a number
+        deliveryMethod, // Stores 'VENDOR' or 'PLATFORM'
+        orderDate: new Date() // Explicitly set the date here!
       });
 
       const savedOrder = await manager.save(newOrder);
@@ -86,7 +90,7 @@ export class OrdersService {
           const mpesaResponse = await this.mpesaService.initiateStkPush(
             phoneNumber,
             Math.round(grandTotal).toString(),
-            savedOrder.id // ✅ Fix: Just pass the raw number
+            savedOrder.id // Just pass the raw number
           );
           return {
             message: 'Order created. Complete payment on your phone.',
@@ -106,27 +110,49 @@ export class OrdersService {
     });
   }
 
-  async markAsPaid(orderId: number, paymentMethod: string) {
-    const order = await this.ordersRepository.findOne({ where: { id: orderId } });
-    if (!order) throw new NotFoundException(`Order #${orderId} not found`);
+  // 🔥 FIX: BULLETPROOF markAsPaid METHOD!
+  async markAsPaid(orderId: number, provider: string): Promise<Order> {
+    // 1. Query ONLY by the exact ID. Force TypeORM to find it even if soft-deleted/modified.
+    const order = await this.ordersRepository.findOne({ 
+      where: { id: orderId },
+      withDeleted: true 
+    });
+    
+    if (!order) {
+      this.logger.error(`CRITICAL: markAsPaid failed. Order #${orderId} genuinely does not exist in the orders table.`);
+      throw new NotFoundException(`Order #${orderId} not found`);
+    }
 
+    // 2. Safely update the status and provider
     order.status = 'PAID';
-    order.paymentMethod = paymentMethod;
+    order.paymentMethod = provider || 'MPESA'; 
+    
+    // 3. Save and return
     return this.ordersRepository.save(order);
   }
 
   async cancelOrder(orderId: number) {
     const order = await this.ordersRepository.findOne({ 
       where: { id: orderId },
-      relations: ['items', 'items.product']
+      relations: ['items', 'items.product'],
+      // Fetch order including soft-deleted products
+      withDeleted: true 
     });
+    
     if (!order) throw new NotFoundException(`Order #${orderId} not found`);
 
     for (const item of order.items) {
-      const product = await this.productsRepository.findOneBy({ id: item.product.id });
-      if (product) {
-        product.stock += item.quantity;
-        await this.productsRepository.save(product);
+      // Safely check if the product exists using optional chaining (?.)
+      if (item.product?.id) {
+        const product = await this.productsRepository.findOne({
+          where: { id: item.product.id },
+          withDeleted: true // Ensure we can find and update stock even if soft-deleted
+        });
+        
+        if (product) {
+          product.stock += item.quantity;
+          await this.productsRepository.save(product);
+        }
       }
     }
     
@@ -141,7 +167,6 @@ export class OrdersService {
   async findAllAdmin(): Promise<Order[]> {
     return this.ordersRepository.find({
       relations: ['items', 'items.product', 'user'],
-      // 🔥 FIX: Include soft-deleted products and users to prevent broken order history UI
       withDeleted: true,
       order: { createdAt: 'DESC' } 
     });
@@ -158,17 +183,26 @@ export class OrdersService {
       .leftJoinAndSelect('item.product', 'product')
       .leftJoinAndSelect('order.user', 'customer')
       .where('product.sellerName = :sellerName', { sellerName }) 
-      // 🔥 FIX: The query builder version of `withDeleted: true`
       .withDeleted()
       .orderBy('order.createdAt', 'DESC')
       .getMany();
   }
 
-  async updateOrderStatus(orderId: number, status: string): Promise<Order> {
+  // ==========================================
+  // DYNAMIC STATUS & DISPUTE HANDLER
+  // ==========================================
+  
+  async updateOrderStatus(orderId: number, status: string, reason?: string): Promise<Order> {
     const order = await this.ordersRepository.findOne({ where: { id: orderId } });
     if (!order) throw new NotFoundException(`Order #${orderId} not found`);
     
     order.status = status;
+
+    // If the PaymentsService passed a reason (e.g., when freezing Escrow), save it!
+    if (reason) {
+      order.disputeReason = reason;
+    }
+
     return this.ordersRepository.save(order);
   }
 }

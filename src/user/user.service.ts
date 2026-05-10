@@ -38,34 +38,72 @@ export class UserService {
   }
 
   // ==========================================
-  // SELLER DASHBOARD LOGIC
+  // SELLER DASHBOARD LOGIC (RBAC ENFORCED)
   // ==========================================
 
-  /**
-   * Fetches customers based on role. Admins see all customers who bought anything.
-   */
-  async findCustomersBySeller(email: string, role?: string): Promise<User[]> {
+  async findCustomersBySeller(email: string, role?: string | string[]): Promise<any[]> {
+    // 1. Determine if the user has Admin privileges
+    const isAdmin = role === 'ADMIN' || role === 'admin' || (Array.isArray(role) && (role.includes('admin') || role.includes('ADMIN')));
+
     const query = this.userRepository.createQueryBuilder('customer')
-      .innerJoin('customer.orders', 'order')
-      .innerJoin('order.items', 'item')
-      // 🔥 FIX: Changed from innerJoin to leftJoin! 
-      // This stops TypeORM from aggressively dropping the customer if the product is soft-deleted.
-      .leftJoin('item.product', 'product')
-      .select([
-        'customer.id', 
-        'customer.email', 
-        'customer.role', 
-        'customer.created_at' 
-      ])
-      .distinct(true)
-      // 🔥 Keep this flag to allow soft-deleted records through
+      .innerJoinAndSelect('customer.orders', 'order')
+      .innerJoinAndSelect('order.items', 'item')
+      .leftJoinAndSelect('item.product', 'product')
       .withDeleted();
 
-    // If the user is NOT an admin, only show them customers who bought products matching their email as sellerName
-    if (role !== 'admin') {
-       query.where('product.sellerName = :email', { email });
+    // 🔥 RBAC LOGIC: If the user is NOT an admin, STRICTLY filter to only show their buyers
+    if (!isAdmin) {
+      query.where('product.sellerName = :email', { email });
     }
 
-    return query.getMany();
+    const customers = await query.getMany();
+
+    // 2. Data Aggregation: Map over the customers to calculate their total spend
+    const customersMap = new Map();
+
+    customers.forEach(customer => {
+      if (!customersMap.has(customer.id)) {
+        customersMap.set(customer.id, {
+          id: customer.id,
+          // 🔥 Fixed: Safely cast to any to bypass TS error if entity is missing this property
+          fullName: (customer as any).fullName || (customer as any).username || 'Guest/Unknown', 
+          email: customer.email,
+          orderCount: 0,
+          totalSpent: 0,
+          uniqueOrders: new Set() // Used to prevent double counting an order with multiple items
+        });
+      }
+
+      const customerStats = customersMap.get(customer.id);
+
+      customer.orders.forEach(order => {
+        let orderTotalForThisView = 0;
+        let hasValidItem = false;
+
+        order.items.forEach(item => {
+           // If they are Admin, count everything. If Seller, count ONLY their own products.
+           if (isAdmin || (item.product && item.product.sellerName === email)) {
+              orderTotalForThisView += (Number(item.price) * item.quantity);
+              hasValidItem = true;
+           }
+        });
+
+        if (hasValidItem) {
+           if (!customerStats.uniqueOrders.has(order.id)) {
+             customerStats.orderCount += 1;
+             customerStats.uniqueOrders.add(order.id);
+           }
+           customerStats.totalSpent += orderTotalForThisView;
+        }
+      });
+    });
+
+    // 3. Clean up the Set before returning JSON and sort by total spent
+    const result = Array.from(customersMap.values()).map(c => {
+      delete c.uniqueOrders; 
+      return c;
+    });
+
+    return result.sort((a, b) => b.totalSpent - a.totalSpent);
   }
 }

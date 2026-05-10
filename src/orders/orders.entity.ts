@@ -20,6 +20,10 @@ export class Order {
   @Column({ default: 'PENDING' })
   status: string;
 
+  // 🔥 For Escrow Disputes
+  @Column({ type: 'text', nullable: true })
+  disputeReason: string;
+  
   @Column({ name: 'user_id' })
   userId: number;
 
@@ -35,6 +39,10 @@ export class Order {
 
   @Column({ default: 'MPESA' })
   paymentMethod: string;
+
+  // 🔥 ADDED: Who is delivering this order? (VENDOR or PLATFORM)
+  @Column({ default: 'VENDOR' }) 
+  deliveryMethod: string;
 
   @Column({ nullable: true })
   phoneNumber: string;

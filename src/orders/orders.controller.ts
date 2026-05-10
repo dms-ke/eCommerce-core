@@ -22,18 +22,26 @@ export class OrdersController {
   }
 
   // ==========================================
-  // SELLER DASHBOARD ENDPOINT
+  // SELLER DASHBOARD ENDPOINT (RBAC ENFORCED)
   // ==========================================
   @Get('seller')
   async getSellerOrders(@Request() req) {
-    // 🔥 FIX: Check for 'username' as well, since your JWT payload uses username instead of email!
     const email = req.user.email || req.user.username;
+    const role = req.user.role || req.user.roles; // Extract role from JWT
     
     if (!email) {
       throw new BadRequestException('Invalid user token: missing email/username');
     }
 
-    // Pass the email down to the service
+    // 🔥 RBAC LOGIC: Check if user is a global Admin
+    const isAdmin = role === 'ADMIN' || role === 'admin' || (Array.isArray(role) && (role.includes('admin') || role.includes('ADMIN')));
+
+    if (isAdmin) {
+      const allOrders = await this.ordersService.findAllAdmin();
+      return { message: `Found ${allOrders.length} total platform orders`, data: allOrders };
+    }
+
+    // 🔥 Strict Seller Boundary
     const orders = await this.ordersService.findOrdersBySellerEmail(email);
     return { 
       message: `Found ${orders.length} orders for your products`, 
@@ -43,7 +51,7 @@ export class OrdersController {
   
   @Patch(':id/status')
   @UseGuards(RolesGuard)
-  @Roles('admin') // Can remove if you want any logged-in seller to manage their orders
+  @Roles('admin') 
   async updateOrderStatus(
     @Param('id', ParseIntPipe) id: number,
     @Body('status') status: string

@@ -20,6 +20,8 @@ import { MpesaModule } from './mpesa/mpesa.module';
 import { AddressesModule } from './addresses/addresses.module';
 import { MessagesModule } from './messages/messages.module';
 import { PaymentsModule } from './payments/payments.module'; // 🔥 NEW: Imported Payments Module
+import { LogisticsModule } from './logistics/logistics.module';
+import { DisputesModule } from './disputes/disputes.module';
 
 @Module({
   imports: [
@@ -80,6 +82,8 @@ import { PaymentsModule } from './payments/payments.module'; // 🔥 NEW: Import
     AddressesModule,
     MessagesModule,
     PaymentsModule,
+    LogisticsModule,
+    DisputesModule,
   ],
 })
 export class AppModule {}

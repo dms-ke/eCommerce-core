@@ -18,10 +18,6 @@ import { Roles } from '../auth/decorators/roles.decorator';
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
-  // ==========================================
-  // PRODUCT ENDPOINTS
-  // ==========================================
-
   @Get('search')
   async searchProducts(@Query('q') query: string) {
     if (!query) {
@@ -30,23 +26,28 @@ export class ProductsController {
     return this.productsService.searchProducts(query);
   }
 
-  // 🔥 NEW: Seller specific endpoint. MUST BE ABOVE @Get() and @Get(':id')
+  // ==========================================
+  // SELLER DASHBOARD ENDPOINT (RBAC ENFORCED)
+  // ==========================================
   @Get('seller')
   @UseGuards(JwtAuthGuard)
   async getSellerProducts(@Request() req) {
-    // Check for username since your JWT payload uses username instead of email!
     const email = req.user.email || req.user.username;
+    const role = req.user.role || req.user.roles;
     
-    if (!email) {
-      throw new BadRequestException('Invalid user token: missing email/username');
+    if (!email) throw new BadRequestException('Invalid user token: missing email/username');
+
+    // 櫨 RBAC LOGIC
+    const isAdmin = role === 'ADMIN' || role === 'admin' || (Array.isArray(role) && (role.includes('admin') || role.includes('ADMIN')));
+
+    if (isAdmin) {
+      // 櫨 Fixed: Calling your existing method name
+      return this.productsService.getProductCatalog(); 
     }
 
-    const products = await this.productsService.findProductsBySeller(email);
-    
-    return {
-      message: `Found ${products.length} products`,
-      data: products
-    };
+    // Sellers ONLY see their own products
+    // 櫨 Fixed: Using the correct method name 'findProductsBySeller'
+    return this.productsService.findProductsBySeller(email); 
   }
 
   @Get()
@@ -70,7 +71,7 @@ export class ProductsController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @Roles('admin', 'seller')
   @UseInterceptors(
     FilesInterceptor('photos', 5, { 
       storage: diskStorage({
@@ -84,7 +85,8 @@ export class ProductsController {
   )
   async addProduct(
     @UploadedFiles() files: Array<Express.Multer.File>, 
-    @Body() productData: any
+    @Body() productData: any,
+    @Request() req // 🔥 FIX 1: Inject the Request object to read the JWT token
   ) {
     if (!files || files.length === 0) {
       throw new BadRequestException('At least one product photo is required.');
@@ -92,8 +94,13 @@ export class ProductsController {
     
     const photoUrls = files.map(file => `/uploads/${file.filename}`);
     
+    // 🔥 FIX 2: Securely extract the seller's exact identity from their token
+    const tokenEmail = req.user.email || req.user.username || 'System Vendor';
+    
+    // 櫨 Fixed method name
     return this.productsService.createProduct({
       ...productData,
+      sellerName: tokenEmail, // 🔥 FIX 3: Force the database to use the token's email, overriding the frontend
       photoUrl: photoUrls[0], 
       gallery: photoUrls,     
     });
@@ -101,18 +108,20 @@ export class ProductsController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @Roles('admin','seller')
   async updateProduct(
     @Param('id', ParseIntPipe) id: number,
     @Body() updateData: any
   ) {
+    // 櫨 Fixed method name
     return this.productsService.updateProduct(id, updateData);
   }
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('admin')
+  @Roles('admin', 'seller')
   async deleteProduct(@Param('id', ParseIntPipe) id: number) {
+    // 櫨 Fixed method name
     return this.productsService.deleteProduct(id);
   }
 
@@ -163,7 +172,7 @@ export class ProductsController {
     @Request() req
   ) {
     const userId = req.user.sub || req.user.userId || req.user.id;
-    const isAdmin = req.user.roles?.includes('admin') || req.user.role === 'admin';
+    const isAdmin = req.user.roles?.includes('admin') || req.user.role === 'admin' || req.user.role === 'ADMIN';
     return this.productsService.updateReview(reviewId, userId, isAdmin, updateData);
   }
 
@@ -174,7 +183,7 @@ export class ProductsController {
     @Request() req
   ) {
     const userId = req.user.sub || req.user.userId || req.user.id;
-    const isAdmin = req.user.roles?.includes('admin') || req.user.role === 'admin';
+    const isAdmin = req.user.roles?.includes('admin') || req.user.role === 'admin' || req.user.role === 'ADMIN';
     return this.productsService.deleteReview(reviewId, userId, isAdmin);
   }
 }

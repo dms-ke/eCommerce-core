@@ -27,7 +27,9 @@ export class MessagesService {
     const newMessage = this.messagesRepository.create({
       senderId,
       sellerId, 
-      sellerName,
+      // 🔥 FIX: Bulletproof safety net. If sellerName is somehow undefined, 
+      // TypeORM will insert 'Vendor' instead of crashing Postgres with a NULL error.
+      sellerName: sellerName || 'Vendor', 
       content,
       orderId,
       productId,
@@ -73,10 +75,23 @@ export class MessagesService {
     return this.messagesRepository.find({
       where: { sellerId },
       relations: ['sender', 'order', 'product'],
+      order: { createdAt: 'ASC' }, // 🔥 FIX: Explicitly sort from oldest to newest
       // 🔥 FIX: Force TypeORM to pull the historical/soft-deleted product data
       // This restores the Product Name and fixes the "Info" button!
-      withDeleted: true,
-      order: { createdAt: 'DESC' },
+      withDeleted: true 
+    });
+  }
+
+  // ========================================================
+  // 🔥 NEW: ADMIN EVIDENCE FETCHER
+  // ========================================================
+
+  // Admin function to read a specific dispute thread
+  async getAdminThread(orderId: number, productId: number) {
+    return this.messagesRepository.find({
+      where: { orderId, productId },
+      order: { createdAt: 'ASC' }, // Fetch oldest to newest so it reads like a normal chat
+      relations: ['sender'], // Brings in the sender's details if needed
     });
   }
 }
